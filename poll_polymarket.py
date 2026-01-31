@@ -1,5 +1,6 @@
 import requests
 import time
+import json
 from datetime import datetime, timezone
 
 # --- Configuration ---
@@ -25,13 +26,11 @@ def is_profitable(market):
     
     try:
         prices = [parse_price(p) for p in json.loads(outcome_prices_str)]
-        # Ensure all prices were parsed correctly and are not None
         if any(p is None for p in prices):
             return False
         return all(MIN_PRICE_THRESHOLD < price < MAX_PRICE_THRESHOLD for price in prices)
     except (json.JSONDecodeError, TypeError):
         return False
-
 
 def is_expiring_soon(market):
     """Check if a market is expiring within the defined window."""
@@ -40,13 +39,11 @@ def is_expiring_soon(market):
         return False
     
     try:
-        # Handle different timezone formats from the API
         if end_date_str.endswith('Z'):
             end_date = datetime.fromisoformat(end_date_str.replace('Z', '+00:00'))
         else:
             end_date = datetime.fromisoformat(end_date_str)
             
-        # If the datetime object is naive, assume UTC
         if end_date.tzinfo is None:
             end_date = end_date.replace(tzinfo=timezone.utc)
             
@@ -58,7 +55,7 @@ def is_expiring_soon(market):
         return False
 
 def fetch_and_filter_markets():
-    """Fetch markets from Polymarket REST API and print filtered results."""
+    """Fetch markets from Polymarket REST API and print filtered results in the desired format."""
     try:
         params = {"active": "true", "closed": "false", "limit": "100"}
         response = requests.get(API_ENDPOINT, params=params)
@@ -66,7 +63,7 @@ def fetch_and_filter_markets():
         events = response.json()
         
         if not events:
-            print("Could not retrieve market data.")
+            # No need to print error, just means no data
             return
 
         all_markets = [market for event in events for market in event.get("markets", [])]
@@ -75,15 +72,32 @@ def fetch_and_filter_markets():
         profitable_expiring_markets = [m for m in expiring_markets if is_profitable(m)]
 
         if not profitable_expiring_markets:
-            print("No profitable markets found expiring in the next 2 hours.")
+            # Silently exit if no markets match, to avoid unnecessary notifications
             return
 
-        print("📈 Polymarket - Expiring Soon:\n")
-        for market in profitable_expiring_markets:
+        # Main header for the entire alert batch
+        print("🔔 **Polymarket Alerts** 📊\n")
+        for i, market in enumerate(profitable_expiring_markets):
+            if i > 0:
+                print("\n---\n") # Separator
+
             question = market['question']
             slug = market['slug']
             link = f"https://polymarket.com/event/{slug}"
-            print(f"- [{question}]({link})")
+            
+            end_date_str = market.get("endDate")
+            if end_date_str.endswith('Z'):
+                end_date_obj = datetime.fromisoformat(end_date_str.replace('Z', '+00:00'))
+            else:
+                end_date_obj = datetime.fromisoformat(end_date_str)
+            formatted_date = end_date_obj.strftime("%B %d, %Y")
+            
+            output = (
+                f"🎯 **Market Focus:** {question}\n"
+                f"📅 **Resolution Date:** {formatted_date}\n"
+                f"[Go to Market]({link})"
+            )
+            print(output)
 
     except requests.exceptions.RequestException as e:
         print(f"Error fetching data: {e}")
