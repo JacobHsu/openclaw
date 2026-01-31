@@ -1,62 +1,84 @@
 import requests
 import time
-import json
-import re
+from datetime import datetime, timezone
 
 # --- Configuration ---
-URL = "https://polymarket.com/"
-HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
-    'Accept-Language': 'en-US,en;q=0.9',
-}
+API_ENDPOINT = "https://gamma-api.polymarket.com/events"
+# Filter for markets where all outcomes are between 5% and 95%
 MIN_PRICE_THRESHOLD = 0.05
 MAX_PRICE_THRESHOLD = 0.95
+# Filter for markets expiring in the next 2 hours (in seconds)
 EXPIRATION_WINDOW_SECONDS = 2 * 60 * 60
 
+def parse_price(price_str):
+    """Safely convert price string to float."""
+    try:
+        return float(price_str)
+    except (ValueError, TypeError):
+        return None
+
 def is_profitable(market):
-    if not market.get("outcomePrices"):
+    """Check if a market's outcomes are within the profitable range."""
+    outcome_prices_str = market.get("outcomePrices")
+    if not outcome_prices_str:
         return False
-    prices = [float(p['price']) for p in market['outcomePrices']]
-    return all(MIN_PRICE_THRESHOLD < price < MAX_PRICE_THRESHOLD for price in prices)
+    
+    try:
+        prices = [parse_price(p) for p in json.loads(outcome_prices_str)]
+        # Ensure all prices were parsed correctly and are not None
+        if any(p is None for p in prices):
+            return False
+        return all(MIN_PRICE_THRESHOLD < price < MAX_PRICE_THRESHOLD for price in prices)
+    except (json.JSONDecodeError, TypeError):
+        return False
+
 
 def is_expiring_soon(market):
-    expiration_ts = market.get("expirationTimestamp")
-    if not expiration_ts:
+    """Check if a market is expiring within the defined window."""
+    end_date_str = market.get("endDate")
+    if not end_date_str:
         return False
-    current_ts = int(time.time())
-    return current_ts < int(expiration_ts) <= (current_ts + EXPIRATION_WINDOW_SECONDS)
+    
+    try:
+        # Handle different timezone formats from the API
+        if end_date_str.endswith('Z'):
+            end_date = datetime.fromisoformat(end_date_str.replace('Z', '+00:00'))
+        else:
+            end_date = datetime.fromisoformat(end_date_str)
+            
+        # If the datetime object is naive, assume UTC
+        if end_date.tzinfo is None:
+            end_date = end_date.replace(tzinfo=timezone.utc)
+            
+        expiration_ts = int(end_date.timestamp())
+        current_ts = int(time.time())
+        
+        return current_ts < expiration_ts <= (current_ts + EXPIRATION_WINDOW_SECONDS)
+    except ValueError:
+        return False
 
 def fetch_and_filter_markets():
+    """Fetch markets from Polymarket REST API and print filtered results."""
     try:
-        response = requests.get(URL, headers=HEADERS)
+        params = {"active": "true", "closed": "false", "limit": "100"}
+        response = requests.get(API_ENDPOINT, params=params)
         response.raise_for_status()
-        html_content = response.text
-
-        match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', html_content)
-        if not match:
-            print("Could not find __NEXT_DATA__ script tag in HTML. Scraping failed.")
-            return
-
-        data = json.loads(match.group(1))
-        # This path might change, but it's the most likely one based on Next.js structure
-        all_markets = data.get("props", {}).get("pageProps", {}).get("initialState", {}).get("markets", {})
+        events = response.json()
         
-        if not all_markets:
-            print("Could not retrieve market data from embedded JSON.")
+        if not events:
+            print("Could not retrieve market data.")
             return
 
-        # The markets are in a dictionary, we need the values
-        market_list = list(all_markets.values())
+        all_markets = [market for event in events for market in event.get("markets", [])]
 
-        expiring_markets = [m for m in market_list if is_expiring_soon(m)]
+        expiring_markets = [m for m in all_markets if is_expiring_soon(m)]
         profitable_expiring_markets = [m for m in expiring_markets if is_profitable(m)]
 
         if not profitable_expiring_markets:
             print("No profitable markets found expiring in the next 2 hours.")
             return
 
-        print("📈 Polymarket - Expiring Soon (via Scraping):\n")
+        print("📈 Polymarket - Expiring Soon:\n")
         for market in profitable_expiring_markets:
             question = market['question']
             slug = market['slug']
@@ -64,7 +86,7 @@ def fetch_and_filter_markets():
             print(f"- [{question}]({link})")
 
     except requests.exceptions.RequestException as e:
-        print(f"Error fetching page: {e}")
+        print(f"Error fetching data: {e}")
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as e:
         print(f"Error parsing data: {e}")
 
