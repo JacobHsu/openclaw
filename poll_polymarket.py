@@ -5,11 +5,12 @@ from datetime import datetime, timezone
 
 # --- Configuration ---
 API_ENDPOINT = "https://gamma-api.polymarket.com/events"
-# Filter for markets where all outcomes are between 5% and 95%
-MIN_PRICE_THRESHOLD = 0.05
-MAX_PRICE_THRESHOLD = 0.95
-# Filter for markets expiring in the next 2 hours (in seconds)
-EXPIRATION_WINDOW_SECONDS = 2 * 60 * 60
+# --- UPDATED: Time window expanded to 4 hours per user request ---
+EXPIRATION_WINDOW_SECONDS = 4 * 60 * 60
+# --- NOTE: Profitability filter is temporarily disabled for testing ---
+# MIN_PRICE_THRESHOLD = 0.05
+# MAX_PRICE_THRESHOLD = 0.95
+
 
 def parse_price(price_str):
     """Safely convert price string to float."""
@@ -18,19 +19,18 @@ def parse_price(price_str):
     except (ValueError, TypeError):
         return None
 
-def is_profitable(market):
-    """Check if a market's outcomes are within the profitable range."""
-    outcome_prices_str = market.get("outcomePrices")
-    if not outcome_prices_str:
-        return False
-    
-    try:
-        prices = [parse_price(p) for p in json.loads(outcome_prices_str)]
-        if any(p is None for p in prices):
-            return False
-        return all(MIN_PRICE_THRESHOLD < price < MAX_PRICE_THRESHOLD for price in prices)
-    except (json.JSONDecodeError, TypeError):
-        return False
+# def is_profitable(market):
+#     """Check if a market's outcomes are within the profitable range."""
+#     outcome_prices_str = market.get("outcomePrices")
+#     if not outcome_prices_str:
+#         return False
+#     try:
+#         prices = [parse_price(p) for p in json.loads(outcome_prices_str)]
+#         if any(p is None for p in prices):
+#             return False
+#         return all(MIN_PRICE_THRESHOLD < price < MAX_PRICE_THRESHOLD for price in prices)
+#     except (json.JSONDecodeError, TypeError):
+#         return False
 
 def is_expiring_soon(market):
     """Check if a market is expiring within the defined window."""
@@ -55,7 +55,7 @@ def is_expiring_soon(market):
         return False
 
 def fetch_and_filter_markets():
-    """Fetch markets from Polymarket REST API and print filtered results in the desired format."""
+    """Fetch markets from Polymarket REST API and print filtered results."""
     try:
         params = {"active": "true", "closed": "false", "limit": "100"}
         response = requests.get(API_ENDPOINT, params=params)
@@ -63,23 +63,23 @@ def fetch_and_filter_markets():
         events = response.json()
         
         if not events:
-            # No need to print error, just means no data
             return
 
         all_markets = [market for event in events for market in event.get("markets", [])]
 
         expiring_markets = [m for m in all_markets if is_expiring_soon(m)]
-        profitable_expiring_markets = [m for m in expiring_markets if is_profitable(m)]
+        # Temporarily removed profitability filter for this test run
+        # profitable_expiring_markets = [m for m in expiring_markets if is_profitable(m)]
+        final_markets = expiring_markets
 
-        if not profitable_expiring_markets:
-            # Silently exit if no markets match, to avoid unnecessary notifications
+        if not final_markets:
+            print("No markets found expiring in the next 4 hours.")
             return
 
-        # Main header for the entire alert batch
-        print("🔔 **Polymarket Alerts** 📊\n")
-        for i, market in enumerate(profitable_expiring_markets):
+        print("🔔 **Polymarket Alerts (Test Run)** 📊\n")
+        for i, market in enumerate(final_markets):
             if i > 0:
-                print("\n---\n") # Separator
+                print("\n---\n")
 
             question = market['question']
             slug = market['slug']
